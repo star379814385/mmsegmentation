@@ -5,6 +5,9 @@ import mmcv
 import numpy as np
 
 from ..builder import PIPELINES
+from pathlib import Path
+import json
+import cv2
 
 
 @PIPELINES.register_module()
@@ -209,3 +212,36 @@ class LoadAnnotationsRGB(object):
         repr_str = self.__class__.__name__
         repr_str += f"imdecode_backend='{self.imdecode_backend}')"
         return repr_str
+
+@PIPELINES.register_module()
+class LoadAnnotationsByLabelme(object):
+    def __init__(self, classes, thickness=-1):
+        assert len(classes) < 256
+        # background_as_zero
+        self.cls2id = {cls: cls_id + 1 for cls_id, cls in enumerate(classes)}
+        self.thickness = thickness
+        
+    def __call__(self, results):
+        if results.get('seg_prefix', None) is not None:
+            filename = osp.join(results['seg_prefix'],
+                                results['ann_info']['seg_map'])
+        else:
+            filename = results['ann_info']['seg_map']
+        assert Path(filename).suffix == ".json"
+        
+        with open(filename, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        gt_semantic_seg = np.zeros((data["imageHeight"], data["imageWidth"]), dtype=np.uint8)
+        for ann in data["shapes"]:
+            cls_id = self.cls2id.get(ann["label"], None)
+            if cls_id is None:
+                continue
+            contour = np.array(ann["points"], dtype=np.int32)
+            cv2.drawContours(gt_semantic_seg, [contour], -1, (cls_id, ), thickness=self.thickness)
+        cv2.imshow("1", gt_semantic_seg.astype(np.uint8) * 255)
+        cv2.waitKey()
+        results['gt_semantic_seg'] = gt_semantic_seg
+        results['seg_fields'].append('gt_semantic_seg')
+        return results
+            
+            
